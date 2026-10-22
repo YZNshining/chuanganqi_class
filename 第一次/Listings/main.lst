@@ -1,0 +1,331 @@
+C51 COMPILER V9.60.7.0   MAIN                                                              10/15/2026 14:30:19 PAGE 1   
+
+
+C51 COMPILER V9.60.7.0, COMPILATION OF MODULE MAIN
+OBJECT MODULE PLACED IN .\Objects\main.obj
+COMPILER INVOKED BY: E:\keil5\C51\BIN\C51.EXE Listings\main.c OPTIMIZE(8,SPEED) BROWSE DEBUG OBJECTEXTEND PRINT(.\Listin
+                    -gs\main.lst) OBJECT(.\Objects\main.obj)
+
+line level    source
+
+   1          #include<reg51.h>
+   2          #include <math.h>
+   3          
+   4          #define uchar unsigned char
+   5          #define uint  unsigned int
+   6          
+   7          #define lcd_data P0           // LCD1602数据口P0
+   8          sbit DQ     = P1^7;           // DS18B20数据引脚
+   9          sbit lcd_RS = P2^0;           // LCD1602 RS
+  10          sbit lcd_RW = P2^1;           // LCD1602 RW
+  11          sbit lcd_EN = P2^2;           // LCD1602 EN
+  12          sbit PWM    = P3^7;           // PWM电机控制引脚
+  13          sbit D      = P3^6;           // 电机转向选择位
+  14          
+  15          uchar t[2], speed, temperature;
+  16          uchar DS18B20_is_ok;
+  17          
+  18          // 温度显示缓存
+  19          uchar TempBuffer1[12]={0x20, 0x20, 0x20, 0x20, 0xdf, 0x43, '\0'};
+  20          // 显示字符串 "  T Monitor  "
+  21          uchar tab[16]={0x20,0x20,0x20,0x54,0x20,0x4d,0x6f,0x6e,0x69,0x74,0x6f,0x72,'\0'};
+  22          
+  23          /************************ LCD1602延时子程序 ************************/
+  24          void delay_20ms(void)      // 延时20ms
+  25          {
+  26   1          uchar i, temp;
+  27   1          for(i = 20; i > 0; i--)
+  28   1          {
+  29   2              temp = 248;
+  30   2              while(--temp);
+  31   2              temp = 248;
+  32   2              while(--temp);
+  33   2          }
+  34   1      }
+  35          
+  36          void delay_38us(void)      // 延时38us
+  37          {
+  38   1          uchar temp;
+  39   1          temp = 18;
+  40   1          while(--temp);
+  41   1      }
+  42          
+  43          void delay_1520us(void)    // 延时1520us
+  44          {
+  45   1          uchar i, temp;
+  46   1          for(i = 3; i > 0; i--)
+  47   1          {
+  48   2              temp = 252;
+  49   2              while(--temp);
+  50   2          }
+  51   1      }
+  52          
+  53          /************************ LCD1602底层驱动 ************************/
+  54          uchar lcd_rd_status(void)         // 读取LCD状态，判忙
+C51 COMPILER V9.60.7.0   MAIN                                                              10/15/2026 14:30:19 PAGE 2   
+
+  55          {
+  56   1          uchar tmp_sts;
+  57   1          lcd_data = 0xff;
+  58   1          lcd_RW = 1;
+  59   1          lcd_RS = 0;
+  60   1          lcd_EN = 1;
+  61   1          tmp_sts = lcd_data;
+  62   1          lcd_EN = 0;
+  63   1          lcd_RW = 0;
+  64   1          return tmp_sts;
+  65   1      }
+  66          
+  67          void lcd_wr_com(uchar command)    // LCD写命令
+  68          {
+  69   1          while(0x80 & lcd_rd_status()); // 等待LCD不忙
+  70   1          lcd_RW = 0;
+  71   1          lcd_RS = 0;
+  72   1          lcd_data = command;
+  73   1          lcd_EN = 1;
+  74   1          lcd_EN = 0;
+  75   1      }
+  76          
+  77          void lcd_wr_data(uchar sjdata)    // LCD写显示数据
+  78          {
+  79   1          while(0x80 & lcd_rd_status()); // 等待LCD不忙
+  80   1          lcd_RW = 0;
+  81   1          lcd_RS = 1;
+  82   1          lcd_data = sjdata;
+  83   1          lcd_EN = 1;
+  84   1          lcd_EN = 0;
+  85   1          lcd_RS = 0;
+  86   1      }
+  87          
+  88          void Init_lcd(void)               // LCD1602初始化
+  89          {
+  90   1          delay_20ms();
+  91   1          lcd_wr_com(0x38);             // 16*2显示，5*8点阵，8位接口
+  92   1          delay_38us();
+  93   1          lcd_wr_com(0x0c);             // 开显示，关闭光标
+  94   1          delay_38us();
+  95   1          lcd_wr_com(0x01);             // 清屏
+  96   1          delay_1520us();
+  97   1          lcd_wr_com(0x06);             // 数据写入后光标自动右移
+  98   1      }
+  99          
+ 100          void GotoXY(uchar x, uchar y)     // 设置显示坐标 x列，y行
+ 101          {
+ 102   1          if(y == 0)
+ 103   1              lcd_wr_com(0x80 | x);     // 第一行
+ 104   1          if(y == 1)
+ 105   1              lcd_wr_com(0xc0 | x);     // 第二行
+ 106   1      }
+ 107          
+ 108          void Print(uchar *str)            // 输出字符串
+ 109          {
+ 110   1          while(*str != '\0')
+ 111   1          {
+ 112   2              lcd_wr_data(*str);
+ 113   2              str++;
+ 114   2          }
+ 115   1      }
+ 116          
+C51 COMPILER V9.60.7.0   MAIN                                                              10/15/2026 14:30:19 PAGE 3   
+
+ 117          void LCD_Print(uchar x, uchar y, uchar *str) // 在指定坐标打印字符串
+ 118          {
+ 119   1          GotoXY(x, y);
+ 120   1          Print(str);
+ 121   1      }
+ 122          
+ 123          /************************ 温度数据转换函数 ************************/
+ 124          void covert1(void)
+ 125          {
+ 126   1          uchar x=0x00;
+ 127   1          if(t[1]>0x07)                  // 判断负温度
+ 128   1          {
+ 129   2              TempBuffer1[0]=0x2d;       // '-'符号
+ 130   2              t[1]=~t[1];
+ 131   2              t[0]=~t[0];
+ 132   2              x=t[0]+1;
+ 133   2              t[0]=x;
+ 134   2              if(x>255)
+ 135   2                  t[1]++;
+ 136   2          }
+ 137   1          else
+ 138   1          {
+ 139   2              TempBuffer1[0]=0x2b;       // '+'符号
+ 140   2          }
+ 141   1      
+ 142   1          t[1]<<=4;
+ 143   1          t[1]=t[1]&0x70;
+ 144   1          x=t[0];
+ 145   1          x>>=4;
+ 146   1          x=x&0x0f;
+ 147   1          t[1]=t[1]|x;
+ 148   1          temperature=t[1];
+ 149   1      
+ 150   1          TempBuffer1[1]=t[1]/100+0x30;
+ 151   1          if(TempBuffer1[1]==0x30)
+ 152   1              TempBuffer1[1]=0xfe;       // 百位消隐
+ 153   1          TempBuffer1[2]=(t[1]%100)/10+0x30;
+ 154   1          TempBuffer1[3]=(t[1]%100)%10+0x30;
+ 155   1      }
+ 156          
+ 157          /************************ DS18B20驱动函数 ************************/
+ 158          void delay_18B20(uint i)
+ 159          {
+ 160   1          while(i--);
+ 161   1      }
+ 162          
+ 163          void Init_DS18B20(void)           // DS18B20初始化
+ 164          {
+ 165   1          uchar x=0;
+ 166   1          DQ = 1;
+ 167   1          delay_18B20(8);
+ 168   1          DQ = 0;
+ 169   1          delay_18B20(80);
+ 170   1          DQ = 1;
+ 171   1          delay_18B20(14);
+ 172   1          x=DQ;
+ 173   1          delay_18B20(20);
+ 174   1      }
+ 175          
+ 176          uchar ReadOneChar(void)           // DS18B20读1字节
+ 177          {
+ 178   1          unsigned char i=0;
+C51 COMPILER V9.60.7.0   MAIN                                                              10/15/2026 14:30:19 PAGE 4   
+
+ 179   1          unsigned char dat0 = 0;
+ 180   1          for (i=8; i>0; i--)
+ 181   1          {
+ 182   2              DQ = 0;
+ 183   2              dat0>>=1;
+ 184   2              DQ = 1;
+ 185   2              if(DQ)
+ 186   2                  dat0|=0x80;
+ 187   2              delay_18B20(4);
+ 188   2          }
+ 189   1          return(dat0);
+ 190   1      }
+ 191          
+ 192          void WriteOneChar(uchar dat1)     // DS18B20写1字节
+ 193          {
+ 194   1          uchar i=0;
+ 195   1          for (i=8; i>0; i--)
+ 196   1          {
+ 197   2              DQ = 0;
+ 198   2              DQ = dat1&0x01;
+ 199   2              delay_18B20(5);
+ 200   2              DQ = 1;
+ 201   2              dat1>>=1;
+ 202   2          }
+ 203   1      }
+ 204          
+ 205          void ReadTemperature(void)        // 读取DS18B20温度
+ 206          {
+ 207   1          Init_DS18B20();
+ 208   1          WriteOneChar(0xCC);           // 跳过ROM
+ 209   1          WriteOneChar(0x44);           // 启动温度转换
+ 210   1          delay_18B20(80);
+ 211   1      
+ 212   1          Init_DS18B20();
+ 213   1          WriteOneChar(0xCC);
+ 214   1          WriteOneChar(0xBE);           // 读取温度寄存器
+ 215   1          delay_18B20(80);
+ 216   1          t[0]=ReadOneChar();           // 温度低字节
+ 217   1          t[1]=ReadOneChar();           // 温度高字节
+ 218   1      }
+ 219          
+ 220          /************************ 电机PWM调速子程序 ************************/
+ 221          void delay_motor(uchar i)
+ 222          {
+ 223   1          uchar j, k;
+ 224   1          for(j=i;j>0;j--)
+ 225   1              for(k=200;k>0;k--);
+ 226   1      }
+ 227          
+ 228          void motor(uchar tmp)
+ 229          {
+ 230   1          uchar x;
+ 231   1          if(TempBuffer1[0]==0x2b)      // 正温度
+ 232   1          {
+ 233   2              if(tmp<25)                // 小于25度电机停止
+ 234   2              {
+ 235   3                  D=0;
+ 236   3                  PWM=0;
+ 237   3              }
+ 238   2              else if(tmp>50)           // 大于50度全速
+ 239   2              {
+ 240   3                  D=0;
+C51 COMPILER V9.60.7.0   MAIN                                                              10/15/2026 14:30:19 PAGE 5   
+
+ 241   3                  PWM=1;
+ 242   3                  x=250;
+ 243   3                  delay_motor(x);
+ 244   3                  PWM=0;
+ 245   3                  x=5;
+ 246   3                  delay_motor(x);
+ 247   3              }
+ 248   2              else                       // 25~50度PWM调速
+ 249   2              {
+ 250   3                  D=0;
+ 251   3                  PWM=1;
+ 252   3                  x=5*tmp;
+ 253   3                  delay_motor(x);
+ 254   3                  PWM=0;
+ 255   3                  x=255-5*tmp;
+ 256   3                  delay_motor(x);
+ 257   3              }
+ 258   2          }
+ 259   1          else if(TempBuffer1[0]==0x2d) // 负温度电机反转
+ 260   1          {
+ 261   2              D=1;
+ 262   2              PWM=0;
+ 263   2              x=5*tmp;
+ 264   2              delay_motor(x);
+ 265   2              PWM=1;
+ 266   2              x=255-5*tmp;
+ 267   2              delay_motor(x);
+ 268   2          }
+ 269   1      }
+ 270          
+ 271          void delay(unsigned int x)
+ 272          {
+ 273   1          unsigned char i;
+ 274   1          while(x--)
+ 275   1          {
+ 276   2              for(i=0; i<123; i++);
+ 277   2          }
+ 278   1      }
+ 279          
+ 280          /************************ main主函数 ************************/
+ 281          void main(void)
+ 282          {
+ 283   1          delay_20ms();
+ 284   1          ReadTemperature();
+ 285   1          Init_lcd();
+ 286   1          LCD_Print(0, 0, tab);
+ 287   1          delay(1000);
+ 288   1      
+ 289   1          while(1)
+ 290   1          {
+ 291   2              ReadTemperature();
+ 292   2              delay_18B20(100);
+ 293   2              covert1();
+ 294   2              LCD_Print(4, 1, TempBuffer1);
+ 295   2              motor(temperature);
+ 296   2          }
+ 297   1      }
+
+
+MODULE INFORMATION:   STATIC OVERLAYABLE
+   CODE SIZE        =    617    ----
+   CONSTANT SIZE    =   ----    ----
+C51 COMPILER V9.60.7.0   MAIN                                                              10/15/2026 14:30:19 PAGE 6   
+
+   XDATA SIZE       =   ----    ----
+   PDATA SIZE       =   ----    ----
+   DATA SIZE        =     33    ----
+   IDATA SIZE       =   ----    ----
+   BIT SIZE         =   ----    ----
+END OF MODULE INFORMATION.
+
+
+C51 COMPILATION COMPLETE.  0 WARNING(S),  0 ERROR(S)

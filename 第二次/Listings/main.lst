@@ -1,0 +1,178 @@
+C51 COMPILER V9.60.7.0   MAIN                                                              10/15/2026 15:08:35 PAGE 1   
+
+
+C51 COMPILER V9.60.7.0, COMPILATION OF MODULE MAIN
+OBJECT MODULE PLACED IN .\Objects\main.obj
+COMPILER INVOKED BY: E:\keil5\C51\BIN\C51.EXE main.c OPTIMIZE(8,SPEED) BROWSE DEBUG OBJECTEXTEND PRINT(.\Listings\main.l
+                    -st) OBJECT(.\Objects\main.obj)
+
+line level    source
+
+   1          #include <reg51.h>       // 单片机 SFR 头文件
+   2          #include <intrins.h>     // 内部函数头文件
+   3          #define uint unsigned int
+   4          #define uchar unsigned char
+   5          
+   6          // ADC0832 的引脚
+   7          sbit ADCS  = P2^0;       // ADC0832 片选
+   8          sbit ADIO  = P3^7;       // DI DO 共用一根IO，统一叫ADIO
+   9          sbit ADCLK = P3^6;       // ADC0832 时钟
+  10          
+  11          // 位扫描代码，控制显示位
+  12          unsigned char code dispbitcode[8] = {
+  13              0xf7, 0xfb, 0xfd, 0xfe, 0xef, 0xdf, 0xbf, 0x7f
+  14          };
+  15          // 共阳数码管字段码，最后一个是熄灭
+  16          unsigned char code dispcode[11] = {
+  17              0xC0, 0xF9, 0xA4, 0xB0, 0x99, 0x92,
+  18              0x82, 0xF8, 0x80, 0x90, 0xff
+  19          };
+  20          volatile unsigned char dispbuf[4]; // 显示缓冲区
+  21          uchar getdata;                     // ADC 转换后的数据
+  22          volatile unsigned char scan_index = 0;
+  23          
+  24          // Timer0 中断：每 1ms 扫描一位数码管
+  25          void timer0_scan(void) interrupt 1 using 1
+  26          {
+  27   1          unsigned char segments;
+  28   1          TH0 = 0xfc;
+  29   1          TL0 = 0x18;
+  30   1          P1 = 0xff;                         // 先消隐
+  31   1          segments = dispcode[dispbuf[scan_index]];
+  32   1          // 第 2 位点亮小数点，且该位不是熄灭状态
+  33   1          if (scan_index == 1 && dispbuf[scan_index] != 10)
+  34   1              segments &= 0x7f;
+  35   1          P0 = segments;
+  36   1          P1 = dispbitcode[scan_index];
+  37   1          scan_index++;
+  38   1          if (scan_index == 4) scan_index = 0;
+  39   1      }
+  40          
+  41          void display_init(void)
+  42          {
+  43   1          P1 = 0xff;
+  44   1          P0 = 0xff;
+  45   1          TMOD = (TMOD & 0xf0) | 0x01; // T0 方式 1
+  46   1          TH0 = 0xfc;
+  47   1          TL0 = 0x18;
+  48   1          ET0 = 1;
+  49   1          EA = 1;
+  50   1          TR0 = 1;
+  51   1      }
+  52          
+  53          /************ 修复 ADC0832 函数 ************/
+  54          unsigned char adc0832(unsigned char channel)
+C51 COMPILER V9.60.7.0   MAIN                                                              10/15/2026 15:08:35 PAGE 2   
+
+  55          {
+  56   1          unsigned char i;
+  57   1          unsigned char dat = 0;
+  58   1          unsigned char cfg;
+  59   1          // CH0:1 1 0，CH1:1 1 1
+  60   1          if (channel == 0)
+  61   1              cfg = 0x02; // 10
+  62   1          else
+  63   1              cfg = 0x03; //11
+  64   1      
+  65   1          ADIO = 1;
+  66   1          ADCLK = 0;
+  67   1          ADCS = 0;
+  68   1          _nop_();_nop_();_nop_();_nop_(); // 等待ADC稳定，增加延时
+  69   1      
+  70   1          //起始位1
+  71   1          ADIO = 1;
+  72   1          _nop_();_nop_();
+  73   1          ADCLK = 1; _nop_();_nop_();
+  74   1          ADCLK = 0; _nop_();_nop_();
+  75   1      
+  76   1          //SGL
+  77   1          ADIO = (cfg >> 1) & 0x01;
+  78   1          _nop_();_nop_();
+  79   1          ADCLK = 1; _nop_();_nop_();
+  80   1          ADCLK = 0; _nop_();_nop_();
+  81   1      
+  82   1          //ODD
+  83   1          ADIO = cfg & 0x01;
+  84   1          _nop_();_nop_();
+  85   1          ADCLK = 1; _nop_();_nop_();
+  86   1          ADCLK = 0; _nop_();_nop_();
+  87   1      
+  88   1          ADIO = 1; //释放数据线，切换输入
+  89   1          _nop_();_nop_();
+  90   1      
+  91   1          //读取8bit MSB在前
+  92   1          for (i = 0; i < 8; i++)
+  93   1          {
+  94   2              ADCLK = 1;
+  95   2              _nop_();_nop_();
+  96   2              ADCLK = 0;
+  97   2              _nop_();_nop_();
+  98   2              dat <<= 1;
+  99   2              if (ADIO)
+ 100   2                  dat |= 0x01;
+ 101   2          }
+ 102   1          ADCS = 1;
+ 103   1          ADCLK = 0;
+ 104   1          ADIO = 1;
+ 105   1          return dat;
+ 106   1      }
+ 107          
+ 108          // 主程序
+ 109          void main(void)
+ 110          {
+ 111   1          unsigned int temp;
+ 112   1          uchar nextbuf[4];
+ 113   1          float press;
+ 114   1          display_init();
+ 115   1          while (1)
+ 116   1          {
+C51 COMPILER V9.60.7.0   MAIN                                                              10/15/2026 15:08:35 PAGE 3   
+
+ 117   2              getdata = adc0832(0); //读ADC，通道0
+ 118   2      
+ 119   2              // ADC 值 13~243 对应压力 15~115 kPa
+ 120   2              if (getdata >= 13 && getdata <= 243)
+ 121   2              {
+ 122   3                  // press = 15 + (getdata - 13) * (115 - 15) / (243 - 13)
+ 123   3                  press = ((float)(getdata - 13) * 100.0 / 230.0) + 17.0;
+ 124   3                  temp = (unsigned int)(press * 10.0 + 0.5); // 放大 10 倍并四舍五入
+ 125   3      
+ 126   3                  nextbuf[3] = temp / 1000;          // 百位
+ 127   3                  nextbuf[2] = (temp % 1000) / 100;  // 十位
+ 128   3                  nextbuf[1] = (temp % 100) / 10;    // 个位
+ 129   3                  nextbuf[0] = temp % 10;            // 十分位
+ 130   3      
+ 131   3                  // 处理前导零：百位为0时熄灭
+ 132   3                  if (nextbuf[3] == 0) {
+ 133   4                      dispbuf[3] = 10; // 熄灭百位
+ 134   4                  } else {
+ 135   4                      dispbuf[3] = nextbuf[3];
+ 136   4                  }
+ 137   3                  dispbuf[2] = nextbuf[2];
+ 138   3                  dispbuf[1] = nextbuf[1];
+ 139   3                  dispbuf[0] = nextbuf[0];
+ 140   3              }
+ 141   2              else
+ 142   2              {
+ 143   3                  //越界熄灭
+ 144   3                  dispbuf[0] = 10;
+ 145   3                  dispbuf[1] = 10;
+ 146   3                  dispbuf[2] = 10;
+ 147   3                  dispbuf[3] = 10;
+ 148   3              }
+ 149   2          }
+ 150   1      }
+
+
+MODULE INFORMATION:   STATIC OVERLAYABLE
+   CODE SIZE        =    434    ----
+   CONSTANT SIZE    =     19    ----
+   XDATA SIZE       =   ----    ----
+   PDATA SIZE       =   ----    ----
+   DATA SIZE        =      6       8
+   IDATA SIZE       =   ----    ----
+   BIT SIZE         =   ----    ----
+END OF MODULE INFORMATION.
+
+
+C51 COMPILATION COMPLETE.  0 WARNING(S),  0 ERROR(S)
